@@ -1,0 +1,15 @@
+# One entry per IRCSL-registered insurer (29). Fill in the real public URLs yourself
+# (product pages, FAQ, news). Verify each URL before running ingest.py.
+# type: life | general | composite
+insurers:
+  - name: Softlogic Life
+    type: life
+    pages:
+      - {url: "https://softlogiclife.lk", category: "life"}
+  - name: Sri Lanka Insurance
+    type: composite
+    pages:
+      - {url: "https://www.srilankainsurance.com", category: "general"}
+  # - name: <insurer 3>
+  #   type: general
+  #   pages: [{url: "https://...", category: "motor"}]

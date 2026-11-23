@@ -1,0 +1,11 @@
+streamlit
+pyyaml
+requests
+beautifulsoup4
+langchain-core
+langchain-community
+langchain-text-splitters
+langchain-huggingface
+sentence-transformers
+faiss-cpu
+langchain-anthropic
