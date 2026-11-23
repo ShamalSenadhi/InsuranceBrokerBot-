@@ -3,6 +3,7 @@ Sources: (1) website pages incl. news/promotion pages, (2) social links found on
 (3) social posts via OFFICIAL routes only: CSV import, Facebook Graph API, YouTube Data API,
 (4) manual text files."""
 import csv, json, os, pathlib, re, time, urllib.robotparser as rp
+from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse, urljoin, urldefrag
 import requests, yaml
@@ -19,6 +20,11 @@ NEWS = re.compile(r"news|promo|offer|blog|media|update|campaign", re.I)
 SKIP = re.compile(r"\.(pdf|jpe?g|png|gif|zip|docx?|xlsx?)(\?|$)|login|career|tender|csr|annual-report|investor|complaint|branch", re.I)
 SOCIAL = {"facebook": "facebook.com", "linkedin": "linkedin.com", "youtube": "youtube.com", "instagram": "instagram.com", "tiktok": "tiktok.com", "x": "twitter.com"}
 MAX_PAGES = 10
+
+@lru_cache(maxsize=1)
+def embeddings():
+    return HuggingFaceEmbeddings(model_name=EMB)  # one shared copy keeps memory low on free hosting
+
 _robots = {}
 
 def allowed(url):
@@ -119,7 +125,7 @@ def build_index(progress=None):
         docs.append(D(name, f.read_text(encoding="utf-8"), f"manual:{f.name}", "web", "manual", "", cat))
     if not docs: raise RuntimeError("No content could be loaded.")
     chunks = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120).split_documents(docs)
-    FAISS.from_documents(chunks, HuggingFaceEmbeddings(model_name=EMB)).save_local("index")
+    FAISS.from_documents(chunks, embeddings()).save_local("index")
     json.dump(status, open("index/status.json", "w")); json.dump(links, open("index/social_links.json", "w"))
     return status
 
