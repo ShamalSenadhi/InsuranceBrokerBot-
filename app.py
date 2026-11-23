@@ -1,61 +1,89 @@
-import os, streamlit as st
+import json, os, streamlit as st
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
+import ingest
 
-EMB = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-st.set_page_config(page_title="Broker Advisor Dashboard", layout="wide")
-st.title("Broker Advisor Dashboard (prototype)")
-st.caption("Aggregates public insurer content and suggests products. Suggestions are a starting point for the broker, not final advice.")
+st.set_page_config(page_title="Insurance Broker Chatbot", page_icon="💬", layout="wide")
+try:
+    os.environ.setdefault("ANTHROPIC_API_KEY", st.secrets["ANTHROPIC_API_KEY"])
+except Exception:
+    pass
+
+SYSTEM = """You are an assistant for a licensed Sri Lankan insurance broker. You help a customer find suitable insurance products from the companies registered with IRCSL, using ONLY the SOURCES provided.
+Behaviour:
+1. If you do not yet know the basics (what they want to cover, who/what is covered, age or dependants, rough budget, main worries), ask at most two short questions. Do not recommend yet.
+2. Once you have enough, suggest 3 to 5 products: insurer, product name, why it fits, and source numbers like [2].
+3. If the sources do not state a price, limits, waiting periods or exclusions, say 'not stated - broker to confirm'. Never invent products, prices or benefits.
+4. End recommendations with the key things the customer should check with the broker (exclusions, sum insured adequacy, claims record).
+Be concise and friendly. Reply in the customer's language (English, Sinhala or Tamil)."""
 
 @st.cache_resource
-def load():
-    return FAISS.load_local("index", HuggingFaceEmbeddings(model_name=EMB),
-                            allow_dangerous_deserialization=True)  # index built locally by ingest.py
-try:
-    vs = load()
-except Exception:
-    st.error("No index found. Run: python ingest.py"); st.stop()
+def load_index():
+    return FAISS.load_local("index", HuggingFaceEmbeddings(model_name=ingest.EMB), allow_dangerous_deserialization=True)
+
+def status():
+    try:
+        return json.load(open("index/status.json"))
+    except Exception:
+        return []
 
 with st.sidebar:
-    st.header("Customer requirements")
-    need = st.multiselect("Cover needed", ["Motor", "Health / medical", "Life / protection", "Property / fire", "Travel", "Business / SME"], ["Motor"])
-    age = st.number_input("Age", 18, 90, 35)
-    dependants = st.number_input("Dependants", 0, 10, 2)
-    budget = st.text_input("Budget (LKR / year)", "")
-    notes = st.text_area("Other details (assets, conditions, concerns)")
-    k = st.slider("Chunks to retrieve", 4, 20, 10)
-    go = st.button("Suggest products", type="primary")
+    st.header("Insurer content")
+    if st.button("Load / refresh content from insurer URLs", type="primary"):
+        bar = st.progress(0.0)
+        try:
+            ingest.build_index(lambda p, m: bar.progress(p, text=m))
+            load_index.clear()
+            st.success("Content loaded.")
+        except Exception as e:
+            st.error(str(e))
+    st.dataframe(status(), hide_index=True, use_container_width=True)
+    names = [s["insurer"] for s in status()]
+    only = st.multiselect("Limit suggestions to insurers (optional)", names)
+    if st.button("Clear chat"):
+        st.session_state.pop("msgs", None)
 
-if go:
-    query = f"Insurance products for: {', '.join(need)}. Age {age}, {dependants} dependants, budget {budget}. {notes}"
-    hits = vs.similarity_search(query, k=k)
-    ctx = "\n\n".join(f"[{i+1}] ({d.metadata['insurer']}, {d.metadata['category']}) {d.page_content}" for i, d in enumerate(hits))
-    left, right = st.columns([3, 2])
-    with left:
-        st.subheader("Suggested products")
+st.title("💬 Insurance Broker Chatbot")
+st.caption("Content is loaded from Sri Lankan insurers' websites. Suggestions are indicative; confirm every detail with a licensed broker.")
+
+try:
+    vs = load_index()
+except Exception:
+    st.info("No content loaded yet. Click 'Load / refresh content from insurer URLs' in the sidebar (takes a few minutes).")
+    st.stop()
+
+if "msgs" not in st.session_state:
+    st.session_state.msgs = [{"role": "assistant", "content": "Hello! Tell me what you would like to insure (vehicle, health, life, travel, property or business) and a little about your situation, and I will suggest suitable products."}]
+for m in st.session_state.msgs:
+    with st.chat_message(m["role"]):
+        st.markdown(m["content"])
+        if m.get("sources"):
+            with st.expander("Sources"):
+                st.markdown("\n".join(m["sources"]))
+
+if q := st.chat_input("Describe your insurance needs..."):
+    st.session_state.msgs.append({"role": "user", "content": q})
+    with st.chat_message("user"):
+        st.markdown(q)
+    user_turns = [m["content"] for m in st.session_state.msgs if m["role"] == "user"][-4:]
+    hits = vs.similarity_search(" ".join(user_turns), k=30)
+    if only:
+        hits = [h for h in hits if h.metadata["insurer"] in only]
+    hits = hits[:10]
+    ctx = "\n\n".join(f"[{i+1}] {h.metadata['insurer']} - {h.page_content}" for i, h in enumerate(hits))
+    srcs = [f"[{i+1}] {h.metadata['insurer']} - {h.metadata['source']}" for i, h in enumerate(hits)]
+    with st.chat_message("assistant"):
         if os.getenv("ANTHROPIC_API_KEY"):
             from langchain_anthropic import ChatAnthropic
             llm = ChatAnthropic(model=os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5"), temperature=0, max_tokens=1200)
-            prompt = ("You support a Sri Lankan insurance broker. Using ONLY the sources below, shortlist up to 5 suitable "
-                      "products for the customer. For each: insurer, product, why it fits, and source numbers like [2]. "
-                      "If sources lack price, exclusions or eligibility, say 'not stated - broker to confirm'. "
-                      "Do not invent products, prices or benefits.\n\n"
-                      f"CUSTOMER: {query}\n\nSOURCES:\n{ctx}")
-            st.markdown(llm.invoke(prompt).content)
+            hist = [HumanMessage(m["content"]) if m["role"] == "user" else AIMessage(m["content"]) for m in st.session_state.msgs[-9:-1]]
+            msgs = [SystemMessage(SYSTEM + "\n\nSOURCES:\n" + ctx)] + hist + [HumanMessage(q)]
+            with st.spinner("Thinking..."):
+                reply = llm.invoke(msgs).content
         else:
-            st.info("Set ANTHROPIC_API_KEY for AI-written suggestions. Showing ranked source passages instead.")
-            for i, d in enumerate(hits):
-                st.markdown(f"**{d.metadata['insurer']}** ({d.metadata['category']}): {d.page_content[:300]}...")
-        with st.expander("Sources used"):
-            for i, d in enumerate(hits):
-                st.markdown(f"[{i+1}] {d.metadata['insurer']} - {d.metadata['source']}")
-    with right:
-        st.subheader("Broker value-add checklist")
-        st.markdown("""
-- Is the sum insured adequate (replacement value, income replacement)?
-- Exclusions, waiting periods, co-pays: confirmed in the actual policy wording?
-- Claims record and service quality of each insurer?
-- Existing cover or gaps (AI cannot see these)?
-- Premium vs. cover trade-off explained to the client?
-- Regulatory points: disclosure, duty to the client, IRCSL rules.
-""")
+            reply = "No API key set, so here are the closest passages from insurer sites:\n\n" + "\n\n".join(f"**{h.metadata['insurer']}**: {h.page_content[:300]}..." for h in hits[:5])
+        st.markdown(reply)
+        with st.expander("Sources"):
+            st.markdown("\n".join(srcs))
+    st.session_state.msgs.append({"role": "assistant", "content": reply, "sources": srcs})
