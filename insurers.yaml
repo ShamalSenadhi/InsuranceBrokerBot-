@@ -1,15 +1,30 @@
-# One entry per IRCSL-registered insurer (29). Fill in the real public URLs yourself
-# (product pages, FAQ, news). Verify each URL before running ingest.py.
-# type: life | general | composite
+# Insurers from IRCSL's "List of Insurance Companies" page (ircsl.gov.lk/list-of-insurance-companies).
+# url = the insurer's own website; ingest.py crawls the homepage plus product-looking links on the same site.
+# Entries marked "verify" are my best guess of the domain - open them once to check.
 insurers:
-  - name: Softlogic Life
-    type: life
-    pages:
-      - {url: "https://softlogiclife.lk", category: "life"}
-  - name: Sri Lanka Insurance
-    type: composite
-    pages:
-      - {url: "https://www.srilankainsurance.com", category: "general"}
-  # - name: <insurer 3>
-  #   type: general
-  #   pages: [{url: "https://...", category: "motor"}]
+  - {name: "AIA Insurance Lanka", type: life, url: "https://www.aialife.com.lk"}
+  - {name: "Allianz Insurance Lanka (General and Life)", type: general+life, url: "https://www.allianz.lk"}
+  - {name: "Amana Takaful (General and Life)", type: general+life, url: "https://www.takaful.lk"}
+  - {name: "Arpico Insurance", type: general, url: "https://www.arpicoinsurance.com"}
+  - {name: "Ceylinco General Insurance", type: general, url: "https://www.ceylinco-insurance.com"}
+  - {name: "Ceylinco Life Insurance", type: life, url: "https://www.ceylincolife.com"}
+  - {name: "Continental Insurance Lanka", type: general, url: "https://www.cilanka.com"}
+  - {name: "Cooperative Insurance Company", type: general, url: "https://www.ci.lk"}
+  - {name: "Cooplife Insurance", type: life, url: "https://www.cooplife.lk"}
+  - {name: "Fairfirst Insurance", type: general, url: "https://www.fairfirst.lk"}
+  - {name: "HNB Assurance", type: life, url: "https://www.hnbassurance.com"}
+  - {name: "HNB General Insurance", type: general, url: "https://www.hnbgeneral.com"}
+  - {name: "Janashakthi Insurance", type: general+life, url: "https://www.janashakthi.com"}
+  - {name: "Life Insurance Corporation (Lanka)", type: life, url: "https://www.liclanka.com"}
+  - {name: "LOLC General Insurance", type: general, url: "https://www.lolcgeneral.com"}   # verify
+  - {name: "LOLC Life Assurance", type: life, url: "https://www.lolclife.com"}            # verify
+  - {name: "MBSL Insurance", type: general, url: "http://www.mbslinsurance.lk"}
+  - {name: "National Insurance Trust Fund", type: general, url: "https://www.nitf.lk"}
+  - {name: "Orient Insurance", type: general, url: "http://www.orientinsurance.lk"}
+  - {name: "People's Insurance", type: general, url: "https://www.peoplesinsurance.lk"}
+  - {name: "Sanasa General Insurance", type: general, url: "http://sgic.lk"}
+  - {name: "Sanasa Life Insurance", type: life, url: "http://www.sicl.lk"}
+  - {name: "Softlogic Life Insurance", type: life, url: "https://softlogiclife.lk"}
+  - {name: "Sri Lanka Insurance (Life)", type: life, url: "https://www.srilankainsurance.com"}
+  - {name: "Sri Lanka Insurance (General)", type: general, url: "https://slicgeneral.lk"}
+  - {name: "Union Assurance", type: life, url: "https://unionassurance.com"}
