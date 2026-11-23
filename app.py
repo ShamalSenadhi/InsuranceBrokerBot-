@@ -1,4 +1,4 @@
-import json, os, streamlit as st
+import json, os, re, streamlit as st
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -11,14 +11,23 @@ for k in ("GROQ_API_KEY", "GOOGLE_API_KEY", "ANTHROPIC_API_KEY", "FB_ACCESS_TOKE
     except Exception:
         pass
 
-SYSTEM = """You are an assistant for a licensed Sri Lankan insurance broker. You help customers find suitable insurance products from companies registered with IRCSL, using ONLY the SOURCES below.
+SYSTEM = """You are a friendly assistant for a licensed Sri Lankan insurance broker. Use ONLY the SOURCES below.
 Rules:
-1. If the message is not about insurance, or the sources do not cover it, say so in one sentence and ask what insurance they need. Do not guess or explain unrelated topics.
-2. If you do not yet know the basics (what to cover, who/what is covered, age or dependants, rough budget, main worries), ask at most two short questions and do not recommend yet.
-3. When you have enough, suggest 3 to 5 products: insurer, product name, why it fits, and source numbers like [2]. Only use products that appear in the sources.
-4. If price, limits, waiting periods or exclusions are not in the sources, write 'not stated - broker to confirm'. Never invent products, prices or benefits.
-5. End recommendations with what to confirm with the broker (exclusions, sum insured adequacy, claims record).
-Be concise. Reply in the customer's language (English, Sinhala or Tamil)."""
+1. If the message is not about insurance or the sources do not cover it, say so in one sentence and ask what they want to insure.
+2. If basics are missing (what to cover, who/what is covered, age or dependants, budget), ask at most 2 short questions. No recommendation yet.
+3. Otherwise answer in EXACTLY this format, in simple words, under 150 words:
+🏆 **Best pick: <product> - <insurer>** [n]
+*<one short, catchy, friendly line>*
+**Why it wins**
+- <three short bullets tied to what the customer said>
+**How the others compare**
+| Option | Good for | Trade-off |
+|---|---|---|
+<2 or 3 rows: other products from the sources, with [n]>
+**Check with your broker:** <one short line>
+BEST_INSURER: <exact insurer name of the best pick>
+4. Never invent products, prices or benefits. If something is not in the sources write 'not stated - broker to confirm'.
+5. Reply in the customer's language (English, Sinhala or Tamil), but keep the BEST_INSURER line in English."""
 
 def ollama_up():
     try:
@@ -120,22 +129,40 @@ if q := st.chat_input("Describe your insurance needs..."):
     ctx = "\n\n".join(f"[{i+1}] {h.metadata['insurer']} ({h.metadata.get('platform','')} {h.metadata.get('date','')}) - {h.page_content[:700]}" for i, h in enumerate(ctx_docs))
     srcs = [f"[{i+1}] {h.metadata['insurer']} - {h.metadata['source']}" for i, h in enumerate(ctx_docs)]
     with st.chat_message("assistant"):
-        reply = None
+        reply, best = None, None
         if llm:
             hist = [HumanMessage(m["content"]) if m["role"] == "user" else AIMessage(m["content"]) for m in st.session_state.msgs[-7:-1]]
             try:
-                with st.spinner("Thinking..."):
+                with st.spinner("Finding your best match..."):
                     reply = llm.invoke([SystemMessage(SYSTEM + "\n\nSOURCES:\n" + ctx)] + hist + [HumanMessage(q)]).content
             except Exception as e:
                 st.warning(f"AI model error (free tier limit?): {e}")
         if reply is None:
-            reply = "Closest passages from insurer sites:\n\n" + "\n\n".join(f"**{h.metadata['insurer']}**: {h.page_content[:300]}..." for h in products[:4])
+            reply = "Closest passages from insurer sites (add an AI key for a best-pick answer):\n\n" + "\n\n".join(f"**{h.metadata['insurer']}**: {h.page_content[:300]}..." for h in products[:4])
+        mt = re.search(r"BEST_INSURER:\s*(.+)", reply)
+        if mt:
+            cand = mt.group(1).strip().lower()
+            reply = reply[:mt.start()].rstrip()
+            best = next((n for n in names if n.lower() in cand or cand in n.lower()), mt.group(1).strip())
         st.markdown(reply)
         with st.expander("Sources"):
             st.markdown("\n".join(srcs))
-        if posts:
-            st.markdown("**Related posts and updates**")
-            for h in posts:
-                m = h.metadata
-                st.markdown(f"- **{m['insurer']}** · {m.get('platform','')} · {m.get('date','')}: {h.page_content[:220]}... [open]({m['source']})")
+        if best:
+            bl = best.lower()
+            pp = [h for h in vs.similarity_search(f"{best} {query}", k=80)
+                  if h.metadata.get("kind") in ("social", "news") and (h.metadata["insurer"].lower() in bl or bl in h.metadata["insurer"].lower())][:3]
+            st.markdown(f"**📣 Latest from {best}**")
+        else:
+            pp = posts[:3]
+            if pp: st.markdown("**📣 Related posts and updates**")
+        for h in pp:
+            m = h.metadata
+            st.markdown(f"- {m.get('platform','')} · {m.get('date','')}: {h.page_content[:220]}... [open]({m['source']})")
+        if best and not pp:
+            try:
+                lk = next((x for x in json.load(open("index/social_links.json")) if x["insurer"] == best), {})
+                lk = {k: v for k, v in lk.items() if k != "insurer"}
+                st.caption("No posts loaded for this insurer yet. Official pages: " + (" · ".join(f"[{k}]({v})" for k, v in lk.items()) or "none found"))
+            except Exception:
+                pass
     st.session_state.msgs.append({"role": "assistant", "content": reply, "sources": srcs})
