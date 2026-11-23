@@ -5,23 +5,53 @@ from langchain_huggingface import HuggingFaceEmbeddings
 import ingest
 
 st.set_page_config(page_title="Insurance Broker Chatbot", page_icon="💬", layout="wide")
-for k in ("ANTHROPIC_API_KEY", "FB_ACCESS_TOKEN", "YOUTUBE_API_KEY"):
+for k in ("GROQ_API_KEY", "GOOGLE_API_KEY", "ANTHROPIC_API_KEY", "FB_ACCESS_TOKEN", "YOUTUBE_API_KEY"):
     try:
         os.environ.setdefault(k, st.secrets[k])
     except Exception:
         pass
 
-SYSTEM = """You are an assistant for a licensed Sri Lankan insurance broker. You help a customer find suitable insurance products from the companies registered with IRCSL, using ONLY the SOURCES provided.
-Behaviour:
-1. If you do not yet know the basics (what they want to cover, who/what is covered, age or dependants, rough budget, main worries), ask at most two short questions. Do not recommend yet.
-2. Once you have enough, suggest 3 to 5 products: insurer, product name, why it fits, and source numbers like [2].
-3. If the sources do not state a price, limits, waiting periods or exclusions, say 'not stated - broker to confirm'. Never invent products, prices or benefits.
-4. End recommendations with the key things the customer should check with the broker (exclusions, sum insured adequacy, claims record).
-Be concise and friendly. Reply in the customer's language (English, Sinhala or Tamil)."""
+SYSTEM = """You are an assistant for a licensed Sri Lankan insurance broker. You help customers find suitable insurance products from companies registered with IRCSL, using ONLY the SOURCES below.
+Rules:
+1. If the message is not about insurance, or the sources do not cover it, say so in one sentence and ask what insurance they need. Do not guess or explain unrelated topics.
+2. If you do not yet know the basics (what to cover, who/what is covered, age or dependants, rough budget, main worries), ask at most two short questions and do not recommend yet.
+3. When you have enough, suggest 3 to 5 products: insurer, product name, why it fits, and source numbers like [2]. Only use products that appear in the sources.
+4. If price, limits, waiting periods or exclusions are not in the sources, write 'not stated - broker to confirm'. Never invent products, prices or benefits.
+5. End recommendations with what to confirm with the broker (exclusions, sum insured adequacy, claims record).
+Be concise. Reply in the customer's language (English, Sinhala or Tamil)."""
+
+def ollama_up():
+    try:
+        import requests
+        return requests.get(os.getenv("OLLAMA_HOST", "http://localhost:11434") + "/api/tags", timeout=1).ok
+    except Exception:
+        return False
+
+def get_llm():
+    """Order: local Ollama (free forever, runs on your PC) -> Groq -> Gemini -> Anthropic. Set LLM_PROVIDER to force one."""
+    want = os.getenv("LLM_PROVIDER", "").lower()
+    if want == "ollama" or (not want and ollama_up()):
+        from langchain_ollama import ChatOllama
+        get_llm.name = "Ollama (local)"
+        return ChatOllama(model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b"), temperature=0, num_predict=900,
+                          base_url=os.getenv("OLLAMA_HOST", "http://localhost:11434"))
+    if os.getenv("GROQ_API_KEY"):
+        from langchain_groq import ChatGroq
+        get_llm.name = "Groq (free tier)"
+        return ChatGroq(model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"), temperature=0, max_tokens=900)
+    if os.getenv("GOOGLE_API_KEY"):
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        get_llm.name = "Gemini (free tier)"
+        return ChatGoogleGenerativeAI(model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"), temperature=0, max_output_tokens=900)
+    if os.getenv("ANTHROPIC_API_KEY"):
+        from langchain_anthropic import ChatAnthropic
+        get_llm.name = "Claude"
+        return ChatAnthropic(model=os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5"), temperature=0, max_tokens=900)
+    return None
 
 @st.cache_resource
 def load_index():
-    return FAISS.load_local("index", HuggingFaceEmbeddings(model_name=ingest.EMB), allow_dangerous_deserialization=True)
+    return FAISS.load_local("index", ingest.embeddings(), allow_dangerous_deserialization=True)
 
 def status():
     try:
@@ -49,9 +79,11 @@ with st.sidebar:
     only = st.multiselect("Limit suggestions to insurers (optional)", names)
     if st.button("Clear chat"):
         st.session_state.pop("msgs", None)
+    llm = get_llm()
+    st.caption("AI model: " + (get_llm.name if llm else "none - install Ollama or add GROQ_API_KEY"))
 
 st.title("💬 Insurance Broker Chatbot")
-st.caption("Content is loaded from Sri Lankan insurers' websites. Suggestions are indicative; confirm every detail with a licensed broker.")
+st.caption("Content is loaded from Sri Lankan insurers' websites and posts. Suggestions are indicative; confirm every detail with a licensed broker.")
 
 try:
     vs = load_index()
@@ -73,23 +105,31 @@ if q := st.chat_input("Describe your insurance needs..."):
     with st.chat_message("user"):
         st.markdown(q)
     user_turns = [m["content"] for m in st.session_state.msgs if m["role"] == "user"][-4:]
-    hits = vs.similarity_search(" ".join(user_turns), k=30)
+    query = " ".join(user_turns)
+    if llm:  # rewrite the conversation into one clean English search query
+        try:
+            query = llm.invoke([HumanMessage("Rewrite this customer conversation as one short English search query for finding insurance products. Output only the query.\n\n" + "\n".join(user_turns))]).content.strip() or query
+        except Exception:
+            pass
+    pool = vs.similarity_search(query, k=60)
     if only:
-        hits = [h for h in hits if h.metadata["insurer"] in only]
-    posts = [h for h in hits if h.metadata.get("kind") in ("social", "news")][:5]
-    hits = hits[:10]
-    ctx = "\n\n".join(f"[{i+1}] {h.metadata['insurer']} ({h.metadata.get('platform','')}, {h.metadata.get('date','')}) - {h.page_content}" for i, h in enumerate(hits))
-    srcs = [f"[{i+1}] {h.metadata['insurer']} - {h.metadata['source']}" for i, h in enumerate(hits)]
+        pool = [h for h in pool if h.metadata["insurer"] in only]
+    products = [h for h in pool if h.metadata.get("kind", "web") == "web"][:6]
+    posts = [h for h in pool if h.metadata.get("kind") in ("social", "news")][:4]
+    ctx_docs = products + posts[:2]
+    ctx = "\n\n".join(f"[{i+1}] {h.metadata['insurer']} ({h.metadata.get('platform','')} {h.metadata.get('date','')}) - {h.page_content[:700]}" for i, h in enumerate(ctx_docs))
+    srcs = [f"[{i+1}] {h.metadata['insurer']} - {h.metadata['source']}" for i, h in enumerate(ctx_docs)]
     with st.chat_message("assistant"):
-        if os.getenv("ANTHROPIC_API_KEY"):
-            from langchain_anthropic import ChatAnthropic
-            llm = ChatAnthropic(model=os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5"), temperature=0, max_tokens=1200)
-            hist = [HumanMessage(m["content"]) if m["role"] == "user" else AIMessage(m["content"]) for m in st.session_state.msgs[-9:-1]]
-            msgs = [SystemMessage(SYSTEM + "\n\nSOURCES:\n" + ctx)] + hist + [HumanMessage(q)]
-            with st.spinner("Thinking..."):
-                reply = llm.invoke(msgs).content
-        else:
-            reply = "No API key set, so here are the closest passages from insurer sites:\n\n" + "\n\n".join(f"**{h.metadata['insurer']}**: {h.page_content[:300]}..." for h in hits[:5])
+        reply = None
+        if llm:
+            hist = [HumanMessage(m["content"]) if m["role"] == "user" else AIMessage(m["content"]) for m in st.session_state.msgs[-7:-1]]
+            try:
+                with st.spinner("Thinking..."):
+                    reply = llm.invoke([SystemMessage(SYSTEM + "\n\nSOURCES:\n" + ctx)] + hist + [HumanMessage(q)]).content
+            except Exception as e:
+                st.warning(f"AI model error (free tier limit?): {e}")
+        if reply is None:
+            reply = "Closest passages from insurer sites:\n\n" + "\n\n".join(f"**{h.metadata['insurer']}**: {h.page_content[:300]}..." for h in products[:4])
         st.markdown(reply)
         with st.expander("Sources"):
             st.markdown("\n".join(srcs))
