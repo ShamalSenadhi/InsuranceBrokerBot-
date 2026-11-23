@@ -36,14 +36,32 @@ def ollama_up():
     except Exception:
         return False
 
+class PoolLLM:
+    """Keyless free LLMs via freellmpool (Pollinations, OVHcloud, Kilo...; auto-failover, also uses any keys you set)."""
+    def __init__(self):
+        from freellmpool import Pool
+        self.pool = Pool.from_default_config()
+    def invoke(self, messages):
+        from types import SimpleNamespace
+        role = {"SystemMessage": "Instructions", "HumanMessage": "Customer", "AIMessage": "Assistant"}
+        prompt = "\n\n".join(f"{role.get(type(m).__name__, 'Customer')}: {m.content}" for m in messages) + "\n\nAssistant:"
+        return SimpleNamespace(content=self.pool.ask(prompt).text)
+
 def get_llm():
-    """Order: local Ollama (free forever, runs on your PC) -> Groq -> Gemini -> Anthropic. Set LLM_PROVIDER to force one."""
+    """Order: local Ollama -> keyless free pool (no API key) -> Groq -> Gemini -> Anthropic. LLM_PROVIDER=ollama|pool|groq forces one."""
     want = os.getenv("LLM_PROVIDER", "").lower()
     if want == "ollama" or (not want and ollama_up()):
         from langchain_ollama import ChatOllama
         get_llm.name = "Ollama (local)"
         return ChatOllama(model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b"), temperature=0, num_predict=900,
                           base_url=os.getenv("OLLAMA_HOST", "http://localhost:11434"))
+    if want in ("", "pool"):
+        try:
+            llm = PoolLLM()
+            get_llm.name = "Free pool (no key)"
+            return llm
+        except Exception:
+            pass
     if os.getenv("GROQ_API_KEY"):
         from langchain_groq import ChatGroq
         get_llm.name = "Groq (free tier)"
@@ -52,10 +70,6 @@ def get_llm():
         from langchain_google_genai import ChatGoogleGenerativeAI
         get_llm.name = "Gemini (free tier)"
         return ChatGoogleGenerativeAI(model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"), temperature=0, max_output_tokens=900)
-    if os.getenv("ANTHROPIC_API_KEY"):
-        from langchain_anthropic import ChatAnthropic
-        get_llm.name = "Claude"
-        return ChatAnthropic(model=os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5"), temperature=0, max_tokens=900)
     return None
 
 @st.cache_resource
@@ -89,7 +103,7 @@ with st.sidebar:
     if st.button("Clear chat"):
         st.session_state.pop("msgs", None)
     llm = get_llm()
-    st.caption("AI model: " + (get_llm.name if llm else "none - install Ollama or add GROQ_API_KEY"))
+    st.caption("AI model: " + (get_llm.name if llm else "none - pip install freellmpool or install Ollama"))
 
 st.title("💬 Insurance Broker Chatbot")
 st.caption("Content is loaded from Sri Lankan insurers' websites and posts. Suggestions are indicative; confirm every detail with a licensed broker.")
@@ -115,7 +129,8 @@ if q := st.chat_input("Describe your insurance needs..."):
         st.markdown(q)
     user_turns = [m["content"] for m in st.session_state.msgs if m["role"] == "user"][-4:]
     query = " ".join(user_turns)
-    if llm:  # rewrite the conversation into one clean English search query
+    if llm and not get_llm.name.startswith("Free pool"):  # (skipped on the keyless pool to save its tiny rate limits)
+        # rewrite the conversation into one clean English search query
         try:
             query = llm.invoke([HumanMessage("Rewrite this customer conversation as one short English search query for finding insurance products. Output only the query.\n\n" + "\n".join(user_turns))]).content.strip() or query
         except Exception:
