@@ -1,3 +1,5 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
 streamlit
 pyyaml
 requests
@@ -8,4 +10,6 @@ langchain-text-splitters
 langchain-huggingface
 sentence-transformers
 faiss-cpu
-langchain-anthropic
+langchain-groq
+langchain-google-genai
+langchain-ollama
