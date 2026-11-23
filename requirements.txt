@@ -13,3 +13,4 @@ faiss-cpu
 langchain-groq
 langchain-google-genai
 langchain-ollama
+freellmpool
