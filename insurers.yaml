@@ -24,7 +24,7 @@ insurers:
   - {name: "People's Insurance", type: general, url: "https://www.peoplesinsurance.lk"}
   - {name: "Sanasa General Insurance", type: general, url: "http://sgic.lk"}
   - {name: "Sanasa Life Insurance", type: life, url: "http://www.sicl.lk"}
-  - {name: "Softlogic Life Insurance", type: life, url: "https://softlogiclife.lk"}
+  - {name: "Softlogic Life Insurance", type: life, url: "https://softlogiclife.lk"}  # optional keys: facebook_page: "<page id or name>", youtube_channel: "<channel id>"
   - {name: "Sri Lanka Insurance (Life)", type: life, url: "https://www.srilankainsurance.com"}
   - {name: "Sri Lanka Insurance (General)", type: general, url: "https://slicgeneral.lk"}
   - {name: "Union Assurance", type: life, url: "https://unionassurance.com"}
