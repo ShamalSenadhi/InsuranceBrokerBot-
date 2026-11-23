@@ -5,10 +5,11 @@ from langchain_huggingface import HuggingFaceEmbeddings
 import ingest
 
 st.set_page_config(page_title="Insurance Broker Chatbot", page_icon="💬", layout="wide")
-try:
-    os.environ.setdefault("ANTHROPIC_API_KEY", st.secrets["ANTHROPIC_API_KEY"])
-except Exception:
-    pass
+for k in ("ANTHROPIC_API_KEY", "FB_ACCESS_TOKEN", "YOUTUBE_API_KEY"):
+    try:
+        os.environ.setdefault(k, st.secrets[k])
+    except Exception:
+        pass
 
 SYSTEM = """You are an assistant for a licensed Sri Lankan insurance broker. You help a customer find suitable insurance products from the companies registered with IRCSL, using ONLY the SOURCES provided.
 Behaviour:
@@ -39,6 +40,11 @@ with st.sidebar:
         except Exception as e:
             st.error(str(e))
     st.dataframe(status(), hide_index=True, use_container_width=True)
+    try:
+        with st.expander("Official social pages found on insurer sites"):
+            st.dataframe(json.load(open("index/social_links.json")), hide_index=True)
+    except Exception:
+        pass
     names = [s["insurer"] for s in status()]
     only = st.multiselect("Limit suggestions to insurers (optional)", names)
     if st.button("Clear chat"):
@@ -70,8 +76,9 @@ if q := st.chat_input("Describe your insurance needs..."):
     hits = vs.similarity_search(" ".join(user_turns), k=30)
     if only:
         hits = [h for h in hits if h.metadata["insurer"] in only]
+    posts = [h for h in hits if h.metadata.get("kind") in ("social", "news")][:5]
     hits = hits[:10]
-    ctx = "\n\n".join(f"[{i+1}] {h.metadata['insurer']} - {h.page_content}" for i, h in enumerate(hits))
+    ctx = "\n\n".join(f"[{i+1}] {h.metadata['insurer']} ({h.metadata.get('platform','')}, {h.metadata.get('date','')}) - {h.page_content}" for i, h in enumerate(hits))
     srcs = [f"[{i+1}] {h.metadata['insurer']} - {h.metadata['source']}" for i, h in enumerate(hits)]
     with st.chat_message("assistant"):
         if os.getenv("ANTHROPIC_API_KEY"):
@@ -86,4 +93,9 @@ if q := st.chat_input("Describe your insurance needs..."):
         st.markdown(reply)
         with st.expander("Sources"):
             st.markdown("\n".join(srcs))
+        if posts:
+            st.markdown("**Related posts and updates**")
+            for h in posts:
+                m = h.metadata
+                st.markdown(f"- **{m['insurer']}** · {m.get('platform','')} · {m.get('date','')}: {h.page_content[:220]}... [open]({m['source']})")
     st.session_state.msgs.append({"role": "assistant", "content": reply, "sources": srcs})
