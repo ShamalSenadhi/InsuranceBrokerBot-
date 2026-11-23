@@ -1,4 +1,4 @@
-import json, os, re, streamlit as st
+import json, os, re, pandas as pd, streamlit as st
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -114,6 +114,69 @@ except Exception:
     st.info("No content loaded yet. Click 'Load / refresh content from insurer URLs' in the sidebar (takes a few minutes).")
     st.stop()
 
+FEATURES = {
+    "Hospitalisation": r"hospitali[sz]ation|in-?patient",
+    "Outpatient (OPD)": r"\bOPD\b|out-?patient",
+    "Critical illness": r"critical illness|serious illness|cancer",
+    "Accident cover": r"accident",
+    "Maternity": r"maternity",
+    "Dental / optical": r"dental|optical",
+    "Life cover": r"life (insurance|cover|assurance)|death benefit",
+    "Motor": r"motor|vehicle|car insurance",
+    "Travel": r"travel",
+    "Property / fire": r"\bfire\b|property|home insurance",
+    "Buy online": r"buy online|online (purchase|payment|quote|portal)|instant",
+    "Digital / fast claims": r"claims? (app|online|digital)|instaclaim|on the spot|cashless",
+    "Takaful (Shariah)": r"takaful|shariah",
+}
+
+def same(a, b):
+    a, b = a.lower(), b.lower()
+    return a in b or b in a
+
+def build_viz(scored, best):
+    sims = {}
+    for h, d in scored:
+        if h.metadata.get("kind", "web") != "web":
+            continue
+        n = h.metadata["insurer"]
+        key = next((k for k in sims if same(k, n)), n)
+        sims.setdefault(key, []).append(1 / (1 + d))
+    if not sims:
+        return None
+    score = {k: sum(sorted(v, reverse=True)[:3]) / min(3, len(v)) for k, v in sims.items()}
+    top = sorted(score, key=score.get, reverse=True)[:5]
+    b = next((k for k in score if best and same(k, best)), None)
+    if b and b not in top:
+        top = top[:4] + [b]
+    mx = max(score[k] for k in top)
+    docs = [d for d in vs.docstore._dict.values() if d.metadata.get("kind", "web") == "web"]
+    match, feat, links = [], [], []
+    for k in top:
+        label = ("🏆 " if k == b else "") + k
+        txt = " ".join(d.page_content for d in docs if same(k, d.metadata["insurer"]))
+        hit = {f: bool(re.search(p, txt, re.I)) for f, p in FEATURES.items()}
+        match.append({"Insurer": label, "Match %": round(100 * score[k] / mx)})
+        feat.append({"Insurer": label, **{f: ("✅" if v else "–") for f, v in hit.items()}, "Features found": sum(hit.values())})
+        pg = next((h for h, _ in scored if same(k, h.metadata["insurer"]) and h.metadata.get("kind", "web") == "web"), None)
+        if pg:
+            links.append(f"- **{label}**: [{pg.metadata.get('title') or pg.metadata['source']}]({pg.metadata['source']})")
+    return {"match": pd.DataFrame(match), "feat": pd.DataFrame(feat), "links": links}
+
+def render_viz(v):
+    st.markdown("### 📊 Compare at a glance")
+    t1, t2, t3, t4 = st.tabs(["Match score", "Feature table", "Feature count", "Pages"])
+    with t1:
+        st.bar_chart(v["match"].set_index("Insurer")["Match %"])
+        st.caption("How closely each insurer's loaded content matches your request (best = 100). It is not a quality rating.")
+    with t2:
+        st.dataframe(v["feat"].drop(columns=["Features found"]), hide_index=True, use_container_width=True)
+        st.caption("✅ = mentioned on the loaded pages. – = not found there (it may still exist). Confirm with the broker.")
+    with t3:
+        st.bar_chart(v["feat"].set_index("Insurer")["Features found"])
+    with t4:
+        st.markdown("\n".join(v["links"]))
+
 if "msgs" not in st.session_state:
     st.session_state.msgs = [{"role": "assistant", "content": "Hello! Tell me what you would like to insure (vehicle, health, life, travel, property or business) and a little about your situation, and I will suggest suitable products."}]
 for m in st.session_state.msgs:
@@ -122,6 +185,8 @@ for m in st.session_state.msgs:
         if m.get("sources"):
             with st.expander("Sources"):
                 st.markdown("\n".join(m["sources"]))
+        if m.get("viz"):
+            render_viz(m["viz"])
 
 if q := st.chat_input("Describe your insurance needs..."):
     st.session_state.msgs.append({"role": "user", "content": q})
@@ -135,9 +200,10 @@ if q := st.chat_input("Describe your insurance needs..."):
             query = llm.invoke([HumanMessage("Rewrite this customer conversation as one short English search query for finding insurance products. Output only the query.\n\n" + "\n".join(user_turns))]).content.strip() or query
         except Exception:
             pass
-    pool = vs.similarity_search(query, k=60)
+    scored = vs.similarity_search_with_score(query, k=60)
     if only:
-        pool = [h for h in pool if h.metadata["insurer"] in only]
+        scored = [(h, d) for h, d in scored if h.metadata["insurer"] in only]
+    pool = [h for h, _ in scored]
     products = [h for h in pool if h.metadata.get("kind", "web") == "web"][:6]
     posts = [h for h in pool if h.metadata.get("kind") in ("social", "news")][:4]
     ctx_docs = products + posts[:2]
@@ -180,4 +246,7 @@ if q := st.chat_input("Describe your insurance needs..."):
                 st.caption("No posts loaded for this insurer yet. Official pages: " + (" · ".join(f"[{k}]({v})" for k, v in lk.items()) or "none found"))
             except Exception:
                 pass
-    st.session_state.msgs.append({"role": "assistant", "content": reply, "sources": srcs})
+        viz = build_viz(scored, best)
+        if viz:
+            render_viz(viz)
+    st.session_state.msgs.append({"role": "assistant", "content": reply, "sources": srcs, "viz": viz})
