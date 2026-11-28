@@ -4,6 +4,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 import ingest
 from explorer import explorer
+from quote import quote_view
 
 st.set_page_config(page_title="Insurance Broker Chatbot", page_icon="💬", layout="wide")
 for k in ("GROQ_API_KEY", "GOOGLE_API_KEY", "ANTHROPIC_API_KEY", "FB_ACCESS_TOKEN", "YOUTUBE_API_KEY"):
@@ -84,7 +85,7 @@ def status():
         return []
 
 with st.sidebar:
-    page = st.radio("View", ["💬 Chatbot", "📈 Market Explorer"])
+    page = st.radio("View", ["💬 Chatbot", "📈 Market Explorer", "🧮 Underwrite & Quote"])
     st.header("Insurer content")
     if st.button("Load / refresh content from insurer URLs", type="primary"):
         bar = st.progress(0.0)
@@ -94,7 +95,7 @@ with st.sidebar:
             st.success("Content loaded.")
         except Exception as e:
             st.error(str(e))
-    st.dataframe(status(), hide_index=True, use_container_width=True)
+    st.dataframe(status(), hide_index=True)
     try:
         with st.expander("Official social pages found on insurer sites"):
             st.dataframe(json.load(open("index/social_links.json")), hide_index=True)
@@ -172,12 +173,16 @@ def render_viz(v):
         st.bar_chart(v["match"].set_index("Insurer")["Match %"])
         st.caption("How closely each insurer's loaded content matches your request (best = 100). It is not a quality rating.")
     with t2:
-        st.dataframe(v["feat"].drop(columns=["Features found"]), hide_index=True, use_container_width=True)
+        st.dataframe(v["feat"].drop(columns=["Features found"]), hide_index=True)
         st.caption("✅ = mentioned on the loaded pages. – = not found there (it may still exist). Confirm with the broker.")
     with t3:
         st.bar_chart(v["feat"].set_index("Insurer")["Features found"])
     with t4:
         st.markdown("\n".join(v["links"]))
+
+if page.startswith("🧮"):
+    quote_view(vs, os.path.getmtime("index/index.faiss"), names)
+    st.stop()
 
 if page.startswith("📈"):
     explorer(vs, os.path.getmtime("index/index.faiss"), names, llm)
