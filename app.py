@@ -87,10 +87,11 @@ def status():
 with st.sidebar:
     page = st.radio("View", ["💬 Chatbot", "📈 Market Explorer", "🧮 Underwrite & Quote"])
     st.header("Insurer content")
+    pdfs = st.checkbox("Include policy PDFs (underwriting terms; slower)", value=True)
     if st.button("Load / refresh content from insurer URLs", type="primary"):
         bar = st.progress(0.0)
         try:
-            ingest.build_index(lambda p, m: bar.progress(p, text=m))
+            ingest.build_index(lambda p, m: bar.progress(p, text=m), include_pdfs=pdfs)
             load_index.clear()
             st.success("Content loaded.")
         except Exception as e:
@@ -140,7 +141,7 @@ def same(a, b):
 def build_viz(scored, best):
     sims = {}
     for h, d in scored:
-        if h.metadata.get("kind", "web") != "web":
+        if h.metadata.get("kind", "web") not in ("web", "policydoc"):
             continue
         n = h.metadata["insurer"]
         key = next((k for k in sims if same(k, n)), n)
@@ -153,7 +154,7 @@ def build_viz(scored, best):
     if b and b not in top:
         top = top[:4] + [b]
     mx = max(score[k] for k in top)
-    docs = [d for d in vs.docstore._dict.values() if d.metadata.get("kind", "web") == "web"]
+    docs = [d for d in vs.docstore._dict.values() if d.metadata.get("kind", "web") in ("web", "policydoc")]
     match, feat, links = [], [], []
     for k in top:
         label = ("🏆 " if k == b else "") + k
@@ -161,7 +162,7 @@ def build_viz(scored, best):
         hit = {f: bool(re.search(p, txt, re.I)) for f, p in FEATURES.items()}
         match.append({"Insurer": label, "Match %": round(100 * score[k] / mx)})
         feat.append({"Insurer": label, **{f: ("✅" if v else "–") for f, v in hit.items()}, "Features found": sum(hit.values())})
-        pg = next((h for h, _ in scored if same(k, h.metadata["insurer"]) and h.metadata.get("kind", "web") == "web"), None)
+        pg = next((h for h, _ in scored if same(k, h.metadata["insurer"]) and h.metadata.get("kind", "web") in ("web", "policydoc")), None)
         if pg:
             links.append(f"- **{label}**: [{pg.metadata.get('title') or pg.metadata['source']}]({pg.metadata['source']})")
     return {"match": pd.DataFrame(match), "feat": pd.DataFrame(feat), "links": links}
@@ -215,7 +216,7 @@ if q := st.chat_input("Describe your insurance needs..."):
     if only:
         scored = [(h, d) for h, d in scored if h.metadata["insurer"] in only]
     pool = [h for h, _ in scored]
-    products = [h for h in pool if h.metadata.get("kind", "web") == "web"][:6]
+    products = [h for h in pool if h.metadata.get("kind", "web") in ("web", "policydoc")][:6]
     posts = [h for h in pool if h.metadata.get("kind") in ("social", "news")][:4]
     ctx_docs = products + posts[:2]
     ctx = "\n\n".join(f"[{i+1}] {h.metadata['insurer']} ({h.metadata.get('platform','')} {h.metadata.get('date','')}) - {h.page_content[:700]}" for i, h in enumerate(ctx_docs))
