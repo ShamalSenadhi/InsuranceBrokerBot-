@@ -3,6 +3,7 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 import ingest
+from explorer import explorer
 
 st.set_page_config(page_title="Insurance Broker Chatbot", page_icon="💬", layout="wide")
 for k in ("GROQ_API_KEY", "GOOGLE_API_KEY", "ANTHROPIC_API_KEY", "FB_ACCESS_TOKEN", "YOUTUBE_API_KEY"):
@@ -83,6 +84,7 @@ def status():
         return []
 
 with st.sidebar:
+    page = st.radio("View", ["💬 Chatbot", "📈 Market Explorer"])
     st.header("Insurer content")
     if st.button("Load / refresh content from insurer URLs", type="primary"):
         bar = st.progress(0.0)
@@ -176,6 +178,10 @@ def render_viz(v):
         st.bar_chart(v["feat"].set_index("Insurer")["Features found"])
     with t4:
         st.markdown("\n".join(v["links"]))
+
+if page.startswith("📈"):
+    explorer(vs, os.path.getmtime("index/index.faiss"), names, llm)
+    st.stop()
 
 if "msgs" not in st.session_state:
     st.session_state.msgs = [{"role": "assistant", "content": "Hello! Tell me what you would like to insure (vehicle, health, life, travel, property or business) and a little about your situation, and I will suggest suitable products."}]
